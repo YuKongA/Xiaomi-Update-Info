@@ -4,12 +4,11 @@
 ### pip install pycryptodome
 ### pip install requests
 
-import base64
-import json
+import base64,json
 
 from sys import argv
 from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad
+from Crypto.Util.Padding import pad, unpad
 from requests import post
 
 
@@ -61,7 +60,7 @@ def generate_json(device, version, android):
 
 def miui_encrypt(json_request):
     cipher = AES.new(miui_key, AES.MODE_CBC, miui_iv)
-    cipher_text = cipher.encrypt(pad(bytes(json_request, "ascii"), AES.block_size))
+    cipher_text = cipher.encrypt(pad(bytes(json_request, "utf-8"), AES.block_size))
     encrypted_request = base64.b64encode(cipher_text)
     return encrypted_request
 
@@ -69,13 +68,9 @@ def miui_encrypt(json_request):
 def miui_decrypt(encrypted_response):
     decipher = AES.new(miui_key, AES.MODE_CBC, miui_iv)
     decrypted = decipher.decrypt(base64.b64decode(encrypted_response))
-    plaintext = decrypted.decode('utf-8').strip()
-    pos = plaintext.rfind('}')
-    if pos != -1:
-        return json.loads(plaintext[:pos + 1])
-    else:
-        return json.loads(plaintext)
-
+    unpadded = unpad(decrypted, AES.block_size)
+    plaintext = unpadded.decode('utf-8').strip()
+    return json.loads(plaintext)
 
 def request(data):
     response = post(check_url, data=data)
@@ -108,6 +103,10 @@ def choose(name):
         rom_branch_log = '开发版内测'
     elif rom_branch == 'T':
         rom_branch_log = '绝密版'
+    elif rom_branch == 'I':
+        rom_branch_log = '待发布'
+    else:
+        rom_branch_log = '未知'
 
     if rom_bigversion == '816': rom_bigversion = "HyperOS 1.0"
 
