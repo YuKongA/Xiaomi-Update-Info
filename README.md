@@ -2,7 +2,7 @@
 
 一个简单的 HyperOS/MIUI 更新链接获取脚本
 
-通过 s:"1" 方式只能获取正式版下载链接，无法获取开发版链接，如需获取请自行使用 s:"2"获取，这需要对应的 securityKey 和 token
+通过 s:"1" 方式只能获取正式版下载链接, 如需获取请使用 s:"2", 这需要登录拥有权限的账号
 
 ```
 Requirements: pycryptodome, requests
@@ -16,7 +16,10 @@ Example:
 
 
 参考来源: 
-https://github.com/HegeKen/MRData/blob/master/script/test2.py
 
-实例：
+(1) https://github.com/HegeKen/MRData/blob/master/script/test2.py
+
+(2) https://github.com/CMDQ8575/Xiaomi-Community-AutoTask/blob/main/xiaomi.py
+
+实例:
 <p><img alt="Demo.png" src="Demo.png"></p>
