@@ -18,9 +18,9 @@ def generate_json(device, version, android, userId):
         "id": f"{userId}",  # userId
         # "sn": "0x0000000000000000",  # SN
         # "a": "0",  # Unknown
-        "b": "F" if "DEV" not in version else "X",  # MIUI branch
+        # "b": "F" if "DEV" not in version else "X",  # MIUI branch
         "c": f"{android}",  # android version Build.VERSION.RELEASE
-        "unlock": "0",  # 1: bootloader is unlocked. 0: bootloader locked.
+        # "unlock": "0",  # 1: bootloader is unlocked. 0: bootloader locked.
         "d": f"{device}",  # PRODUCT_DEVICE
         # "lockZoneChannel": "",  # Unknown
         "f": "1",  # Unknown, necessary
@@ -33,7 +33,7 @@ def generate_json(device, version, android, userId):
         # "n": "ct",  # ro.carrier.name
         # "p": device,  # PRODUCT_DEVICE
         # "pb": "Xiaomi",  # "Redmi", PRODUCT_BRAND
-        "r": "CN",  # Sales regions. (for changelog)
+        # "r": "CN",  # Sales regions.
         # MIUI version "MIUI-" + Build.VERSION.INCREMENTAL
         "v": f"miui-{version.replace('OS1', 'V816')}",
         # "sdk": "34" if android == "14" else "33",  # Android SDK
