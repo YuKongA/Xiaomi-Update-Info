@@ -29,7 +29,7 @@ def generate_json(device, version, android, userId):
         # "i": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
         # "i2": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
         # "isR": "0",  # ro.debuggable
-        "l": "zh_cn",  # The locale. (for changelog)
+        "l": "zh_CN",  # The locale. (for changelog)
         # "n": "ct",  # ro.carrier.name
         # "p": device,  # PRODUCT_DEVICE
         # "pb": "Xiaomi",  # "Redmi", PRODUCT_BRAND
