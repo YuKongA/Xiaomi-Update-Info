@@ -32,7 +32,7 @@ def generate_json(device, version, android, userId):
         "l": "zh_cn",  # The locale. (for changelog)
         # "n": "ct",  # ro.carrier.name
         # "p": device,  # PRODUCT_DEVICE
-        # "pb": "Xiaomi", "Redmi",  # PRODUCT_BRAND
+        # "pb": "Xiaomi",  # "Redmi", PRODUCT_BRAND
         "r": "CN",  # Sales regions. (for changelog)
         # MIUI version "MIUI-" + Build.VERSION.INCREMENTAL
         "v": f"miui-{version.replace('OS1', 'V816')}",
