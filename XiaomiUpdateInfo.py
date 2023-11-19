@@ -94,17 +94,17 @@ def choose(name, s):
     latset_rom_filename = latset_rom_info.get("filename", "Unknown")
 
     if rom_branch == "F":
-        rom_branch_log = "正式版"
+        rom_branch_log = "正式版 (每月构建, 末尾版本不为 0 的为内部测试构建)"
     elif rom_branch == "X":
-        rom_branch_log = "开发版公测"
+        rom_branch_log = "开发版 (每周构建)"
     elif rom_branch == "D":
-        rom_branch_log = "开发版内测"
+        rom_branch_log = "开发版内测 (每日构建, 有时候会转到开发版)"
     elif rom_branch == "T":
-        rom_branch_log = "绝密版"
+        rom_branch_log = "绝密版 (曾经的内测版及未通过测试的版本)"
     elif rom_branch == "I":
-        rom_branch_log = "待发布"
+        rom_branch_log = "内部构建 (内部测试使用, 有时候会转到开发版)"
     else:
-        rom_branch_log = "未知"
+        rom_branch_log = "其他版本"
 
     if (rom_branch == "F" or rom_branch == "X") and rom_bigversion == "816":
         rom_name = "OS" + rom_name
