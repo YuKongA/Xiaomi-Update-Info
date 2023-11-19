@@ -4,6 +4,7 @@
 import requests, json, time, base64, binascii, hashlib
 
 from sys import argv
+from urllib.parse import urlparse, parse_qs
 
 
 # 获取Cookie
@@ -12,21 +13,30 @@ def login(account, password):
     md5.update(password.encode())
     Hash = md5.hexdigest()
     sha1 = hashlib.sha1()
-    url = "https://account.xiaomi.com/pass/serviceLoginAuth2"
+    url1 = "https://account.xiaomi.com/pass/serviceLogin"
+    response1 = requests.get(url1, allow_redirects=False)
+    url2 = response1.headers["Location"]
+    parsed_url = urlparse(url2)
+    params = parse_qs(parsed_url.query)
+    keyword = params.get("_sign", [""])[0]
+    _sign = keyword.replace("2&V1_passport&", "")
+    url3 = "https://account.xiaomi.com/pass/serviceLoginAuth2"
     data = {
         "_json": "true",
         "bizDeviceType": "",
         "user": account,
         "hash": Hash.upper(),
         "sid": "miuiromota",
-        "_sign": "L+dSQY6sjSQ/CRjJs4p+U1vNYLY=",
+        "_sign": _sign,
         "_locale": "zh_CN",
     }
-    response = requests.post(url=url, data=data).text.lstrip("&").lstrip("START").lstrip("&")
-    cookies_data = json.dumps(response, ensure_ascii=False, allow_nan=True)
+    response2 = (
+        requests.post(url=url3, data=data).text.lstrip("&").lstrip("START").lstrip("&")
+    )
+    cookies_data = json.dumps(response2, ensure_ascii=False, allow_nan=True)
     with open("response.json", "w", encoding="utf-8") as file:
-        file.write(response)
-    Auth = json.loads(response)
+        file.write(response2)
+    Auth = json.loads(response2)
     if Auth["description"] != "成功":
         return "Error"
     sha1.update(
