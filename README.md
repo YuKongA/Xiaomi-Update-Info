@@ -7,7 +7,7 @@ Requirements: pycryptodome, requests
 Usage: XiaomiUpdateInfo.py codename rom_version android_version
 
 Example:
-(1) XiaomiUpdateInfo.py houji OS1.0.29.0.UNCCNXM 14 // 正式版
+(1) XiaomiUpdateInfo.py houji OS1.0.20.0.UNCCNXM 14 // 正式版
 (2) XiaomiUpdateInfo.py houji OS1.0.23.11.13.DEV 14 // 开发版
 (3) XiaomiUpdateInfo.py houji_pre 23.11.19 14 // 内测版
 ```
