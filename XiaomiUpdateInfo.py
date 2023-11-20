@@ -29,11 +29,11 @@ def generate_json(device, version, android, userId):
         # "i": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
         # "i2": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
         # "isR": "0",  # ro.debuggable
-        "l": "zh_CN",  # The locale. (for changelog)
+        "l": "zh_CN" if "_global" not in device else "en_US",  # The locale. (for changelog)
         # "n": "ct",  # ro.carrier.name
         # "p": device,  # PRODUCT_DEVICE
         # "pb": "Xiaomi",  # "Redmi", PRODUCT_BRAND
-        # "r": "CN",  # Sales regions.
+        "r": "CN" if "_global" not in device else "GL",  # Sales regions. (for changelog)
         # MIUI version "MIUI-" + Build.VERSION.INCREMENTAL
         "v": f"miui-{version.replace('OS1', 'V816')}",
         # "sdk": "34" if android == "14" else "33",  # Android SDK
