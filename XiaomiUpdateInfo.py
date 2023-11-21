@@ -80,7 +80,7 @@ def request(data):
 def choose(name, s):
     current_rom_info = name.get("CurrentRom", {})
     rom_device = current_rom_info.get("device", "Unknown")
-    rom_name = current_rom_info.get("name", "Unknown")
+    rom_version = current_rom_info.get("version", "Unknown")
     rom_bigversion = current_rom_info.get("bigversion", "Unknown")
     rom_codebase = current_rom_info.get("codebase", "Unknown")
     rom_branch = current_rom_info.get("branch", "Unknown")
@@ -106,9 +106,6 @@ def choose(name, s):
     else:
         rom_branch_log = "其他版本"
 
-    if (rom_branch == "F" or rom_branch == "X") and rom_bigversion == "816":
-        rom_name = "OS" + rom_name
-
     if rom_bigversion == "816":
         rom_bigversion = "HyperOS 1.0"
 
@@ -129,14 +126,14 @@ def choose(name, s):
         .replace("txt:", ""),
     )
 
-    if rom_name == "Unknown":
+    if rom_version == "Unknown":
         result = "\n\n未获取到相关 ROM 信息\n\n"
     elif rom_filename == "Unknown":
-        result = f"\ndevice: {rom_device}\nname: {rom_name}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch_log}\ninterface: {s}\n"
+        result = f"\ndevice: {rom_device}\nversion: {rom_version}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch_log}\ninterface: {s}\n"
     elif rom_md5 == latset_rom_md5:
-        result = f"\ndevice: {rom_device}\nname: {rom_name}\nbigversion: {rom_bigversion}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch_log}\ninterface: {s}\n\nfilename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://ultimateota.d.miui.com/{rom_name}/{latset_rom_filename}\nchangelog:\n{rom_changelog}\n"
+        result = f"\ndevice: {rom_device}\nversion: {rom_version}\nbigversion: {rom_bigversion}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch_log}\ninterface: {s}\n\nfilename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://ultimateota.d.miui.com/{rom_version}/{latset_rom_filename}\nchangelog:\n{rom_changelog}\n"
     else:
-        result = f"\ndevice: {rom_device}\nname: {rom_name}\nbigversion: {rom_bigversion}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch_log}\ninterface: {s}\n\nfilename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://bigota.d.miui.com/{rom_name}/{rom_filename}\nchangelog:\n{rom_changelog}\n"
+        result = f"\ndevice: {rom_device}\nversion: {rom_version}\nbigversion: {rom_bigversion}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch_log}\ninterface: {s}\n\nfilename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://bigota.d.miui.com/{rom_version}/{rom_filename}\nchangelog:\n{rom_changelog}\n"
 
     print(result)
 
