@@ -154,30 +154,27 @@ def main():
     version = argv[2]
     android = argv[3]
     userId = ""
+    serviceToken = ""
+    interface = "1"
     securityKey = b"miuiotavalided11"
     iv = b"0102030405060708"
-    if os.path.isfile("response.json"):
-        with open("response.json", "r", encoding="utf-8") as file:
-            response = json.load(file)
-            userId = response["userId"]
-            securityKey = base64.b64decode(response["ssecurity"])
-    json_data = generate_json(device, version, android, userId)
-    q = miui_encrypt(json_data, securityKey, iv)
-    t = ""
-    s = "1"
     if os.path.isfile("cookies.json"):
         with open("cookies.json", "r", encoding="utf-8") as file:
             cookies = json.load(file)
-            t = cookies["serviceToken"]
-    if t != "":
-        s = "2"
-    post_data = {"q": q, "t": t, "s": s}
-    encrypted_text = request(post_data)
-    decrypted_text = miui_decrypt(encrypted_text, securityKey, iv)
+            userId = cookies["userId"]
+            securityKey = base64.b64decode(cookies["ssecurity"])
+            serviceToken = cookies["serviceToken"]
+    json_data = generate_json(device, version, android, userId)
+    encrypted_text = miui_encrypt(json_data, securityKey, iv)
+    if serviceToken != "":
+        interface = "2"
+    post_data = {"q": encrypted_text, "t": serviceToken, "s": interface}
+    requested_encrypted_text = request(post_data)
+    requested_decrypted_text = miui_decrypt(requested_encrypted_text, securityKey, iv)
     if len(argv) == 5:
-        print(decrypted_text)
+        print(requested_decrypted_text)
     else:
-        choose(decrypted_text, s)
+        choose(requested_decrypted_text, interface)
 
 
 if __name__ == "__main__":

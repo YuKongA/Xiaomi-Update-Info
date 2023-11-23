@@ -33,10 +33,9 @@ def login(account, password):
     response2 = (
         requests.post(url=url3, data=data).text.lstrip("&").lstrip("START").lstrip("&")
     )
-    cookies_data = json.dumps(response2, ensure_ascii=False, allow_nan=True)
-    with open("response.json", "w", encoding="utf-8") as file:
-        file.write(response2)
     Auth = json.loads(response2)
+    ssecurity = Auth["ssecurity"]
+    userId = Auth["userId"]
     if Auth["description"] != "成功":
         return "Error"
     sha1.update(
@@ -49,9 +48,11 @@ def login(account, password):
     )
     nurl = Auth["location"] + "&_userIdNeedEncrypt=true&clientSign=" + clientSign
     cookies_dict = requests.utils.dict_from_cookiejar(requests.get(url=nurl).cookies)
-    cookies_data = json.dumps(cookies_dict, ensure_ascii=False, allow_nan=True)
+    serviceToken = cookies_dict["serviceToken"]
+    data = {"userId": userId, "ssecurity": ssecurity, "serviceToken": serviceToken}
+    json_data = json.dumps(data, ensure_ascii=False, indent=4)
     with open("cookies.json", "w", encoding="utf-8") as file:
-        file.write(cookies_data)
+        file.write(json_data)
     return cookies_dict
 
 
