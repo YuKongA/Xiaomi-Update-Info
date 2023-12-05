@@ -11,18 +11,21 @@ Requirements:
 pip install --upgrade -r requirements.txt 
 
 Usage:
+// 查看完整帮助
+XiaomiUpdateInfo.py --help
+
 // 登录小米账号，使用 v1 接口无需登录
-XiaomiCommunity.py account password
+XiaomiUpdateInfo.py --login
 
 // 对应：设备代号 系统版本 安卓版本
 XiaomiUpdateInfo.py codename rom_version android_version
 
 Example:
 // 正式版，无需登录，不需要用户权限
-(1) XiaomiUpdateInfo.py houji OS1.0.20.0.UNCCNXM 14
+XiaomiUpdateInfo.py houji OS1.0.20.0.UNCCNXM 14
 
 // 开发版，需登录，需要对应用户权限
-(2) XiaomiUpdateInfo.py houji OS1.0.23.11.13.DEV 14
+XiaomiUpdateInfo.py houji OS1.0.23.11.13.DEV 14
 ```
 
 ## Credits:

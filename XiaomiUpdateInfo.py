@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import base64, json, re, requests, os, argparse
+import base64, json, re, requests, os, argparse, binascii, hashlib, getpass, sys
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
+from urllib.parse import urlparse, parse_qs
 
 
 # 常量
@@ -33,11 +34,15 @@ def generate_json(device, version, android, userId):
         # "i": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
         # "i2": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
         # "isR": "0",  # ro.debuggable
-        "l": "zh_CN" if "_global" not in device else "en_US",  # The locale. (for changelog)
+        "l": "zh_CN"
+        if "_global" not in device
+        else "en_US",  # The locale. (for changelog)
         # "n": "ct",  # ro.carrier.name
         # "p": device,  # PRODUCT_DEVICE
         # "pb": "Xiaomi",  # "Redmi", PRODUCT_BRAND
-        "r": "CN" if "_global" not in device else "GL",  # Sales regions. (for changelog)
+        "r": "CN"
+        if "_global" not in device
+        else "GL",  # Sales regions. (for changelog)
         # MIUI version "MIUI-" + Build.VERSION.INCREMENTAL
         "v": f"miui-{version.replace('OS1', 'V816')}",
         # "sdk": "34" if android == "14" else "33",  # Android SDK
@@ -55,7 +60,7 @@ def generate_json(device, version, android, userId):
     return json.dumps(data).replace(" ", "").replace("'", '"')
 
 
-# AES加密
+# AES 加密
 def miui_encrypt(json_request, securityKey):
     cipher = AES.new(securityKey, AES.MODE_CBC, IV)
     padded_text = pad(json_request.encode("utf-8"), cipher.block_size)
@@ -63,7 +68,7 @@ def miui_encrypt(json_request, securityKey):
     return base64.urlsafe_b64encode(encrypted_text).decode("utf-8")
 
 
-# AES解密
+# AES 解密
 def miui_decrypt(encrypted_text, securityKey):
     cipher = AES.new(securityKey, AES.MODE_CBC, IV)
     encrypted_text_bytes = base64.urlsafe_b64decode(encrypted_text)
@@ -105,12 +110,21 @@ def choose(name, interface):
     rom_md5 = current_rom_info.get("md5", "Unknown")
     rom_filename = current_rom_info.get("filename", "Unknown")
     rom_filesize = current_rom_info.get("filesize", "Unknown")
-    rom_bigversion = ("HyperOS 1.0" if current_rom_info.get("bigversion") == "816" else current_rom_info.get("bigversion", "Unknown"))
+    rom_bigversion = (
+        "HyperOS 1.0"
+        if current_rom_info.get("bigversion") == "816"
+        else current_rom_info.get("bigversion", "Unknown")
+    )
     rom_branch = parse_rom_branch(current_rom_info.get("branch", "Unknown"))
     rom_changelog = re.sub(
         r"\n\s*\n",
         "\n",
-        json.dumps(current_rom_info.get("changelog", "Unknown"), indent=2, ensure_ascii=False, allow_nan=True,)
+        json.dumps(
+            current_rom_info.get("changelog", "Unknown"),
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=True,
+        )
         .replace("[", "")
         .replace("]", "")
         .replace("{", "")
@@ -135,20 +149,81 @@ def choose(name, interface):
     print(result)
 
 
+# 获取 Cookie
+def login():
+    account = input("账号：")
+    password = getpass.getpass("密码：")
+    print(f"{account}：登录中...")
+    md5 = hashlib.md5()
+    md5.update(password.encode())
+    Hash = md5.hexdigest()
+    sha1 = hashlib.sha1()
+    url1 = "https://account.xiaomi.com/pass/serviceLogin"
+    response1 = requests.get(url1, allow_redirects=False)
+    url2 = response1.headers["Location"]
+    parsed_url = urlparse(url2)
+    params = parse_qs(parsed_url.query)
+    keyword = params.get("_sign", [""])[0]
+    _sign = keyword.replace("2&V1_passport&", "")
+    url3 = "https://account.xiaomi.com/pass/serviceLoginAuth2"
+    data = {
+        "_json": "true",
+        "bizDeviceType": "",
+        "user": account,
+        "hash": Hash.upper(),
+        "sid": "miuiromota",
+        "_sign": _sign,
+        "_locale": "zh_CN",
+    }
+    response2 = (
+        requests.post(url=url3, data=data).text.lstrip("&").lstrip("START").lstrip("&")
+    )
+    Auth = json.loads(response2)
+    ssecurity = Auth["ssecurity"]
+    userId = Auth["userId"]
+    if Auth["description"] != "成功":
+        return "Error"
+    sha1.update(
+        ("nonce=" + str(Auth["nonce"]) + "&" + Auth["ssecurity"]).encode("utf-8")
+    )
+    clientSign = (
+        base64.encodebytes(binascii.a2b_hex(sha1.hexdigest().encode("utf-8")))
+        .decode(encoding="utf-8")
+        .strip()
+    )
+    nurl = Auth["location"] + "&_userIdNeedEncrypt=true&clientSign=" + clientSign
+    cookies_dict = requests.utils.dict_from_cookiejar(requests.get(url=nurl).cookies)
+    serviceToken = cookies_dict["serviceToken"]
+    data = {"userId": userId, "ssecurity": ssecurity, "serviceToken": serviceToken}
+    json_data = json.dumps(data, ensure_ascii=False, indent=4)
+    with open("cookies.json", "w", encoding="utf-8") as file:
+        file.write(json_data)
+    if len(cookies_dict) == 0 or cookies_dict == "Error":
+        print(f"{account}：登录失败")
+        return login()
+    else:
+        print(f"{account}：登录成功")
+        sys.exit()
+
+
 # 使用提示
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Xiaomi Update Info")
-    parser.add_argument("codename", help="Device codename")
-    parser.add_argument("rom_version", help="ROM version")
-    parser.add_argument("android_version", help="Android version")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("codename", help="Device codename", nargs="?")
+    parser.add_argument("rom_version", help="ROM version", nargs="?")
+    parser.add_argument("android_version", help="Android version", nargs="?")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="verbose output the returned json"
+    )
+    parser.add_argument(
+        "-l", "--login", action="store_true", help="login to get using v2 interface"
+    )
 
     return parser.parse_args()
 
 
-# 主程序
-def main():
-    args = parse_arguments()
+## 输出 ROM 信息
+def rom_info(codename, rom_version, android_version, verbose):
     userId = ""
     serviceToken = ""
     interface = "1"
@@ -159,17 +234,29 @@ def main():
             userId = cookies["userId"]
             securityKey = base64.b64decode(cookies["ssecurity"])
             serviceToken = cookies["serviceToken"]
-    json_data = generate_json(args.codename, args.rom_version, args.android_version, userId)
+    json_data = generate_json(codename, rom_version, android_version, userId)
     encrypted_text = miui_encrypt(json_data, securityKey)
     if serviceToken != "":
         interface = "2"
     post_data = {"q": encrypted_text, "t": serviceToken, "s": interface}
     requested_encrypted_text = request(post_data)
     requested_decrypted_text = miui_decrypt(requested_encrypted_text, securityKey)
-    if args.verbose == True:
+    if verbose == True:
         print(requested_decrypted_text)
     else:
         choose(requested_decrypted_text, interface)
+
+
+# 主程序
+def main():
+    args = parse_arguments()
+    if args.login:
+        login()
+    elif args.codename and args.rom_version and args.android_version:
+        rom_info(args.codename, args.rom_version, args.android_version, args.verbose)
+    else:
+        print("请输入正确的参数，使用 -h 查看帮助")
+        sys.exit()
 
 
 if __name__ == "__main__":
