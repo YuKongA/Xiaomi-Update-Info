@@ -1,1 +1,4 @@
 cookies.json
+build
+dist
+*.spec
