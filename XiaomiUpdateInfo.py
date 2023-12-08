@@ -130,7 +130,8 @@ def choose(name, interface):
         .replace("{", "")
         .replace("}", "")
         .replace('"', "")
-        .replace("txt:", ""),
+        .replace("txt:", "")
+        .replace(",", ""),
     )
 
     latset_rom_info = name.get("LatestRom", {})
@@ -179,10 +180,14 @@ def login():
         requests.post(url=url3, data=data).text.lstrip("&").lstrip("START").lstrip("&")
     )
     Auth = json.loads(response2)
+    if Auth["description"] != "成功":
+        if Auth["description"] == "登录验证失败":
+            print(f"{account}：登录验证失败")
+        else:
+            print(f"{account}：登录失败")
+        return
     ssecurity = Auth["ssecurity"]
     userId = Auth["userId"]
-    if Auth["description"] != "成功":
-        return "Error"
     sha1.update(
         ("nonce=" + str(Auth["nonce"]) + "&" + Auth["ssecurity"]).encode("utf-8")
     )
@@ -200,7 +205,7 @@ def login():
         file.write(json_data)
     if len(cookies_dict) == 0 or cookies_dict == "Error":
         print(f"{account}：登录失败")
-        return login()
+        return
     else:
         print(f"{account}：登录成功")
         sys.exit()
