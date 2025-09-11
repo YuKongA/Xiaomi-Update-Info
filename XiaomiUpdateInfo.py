@@ -97,11 +97,11 @@ def request(data):
 
 def parse_rom_branch(rom_branch):
     branch_descriptions = {
-        "F": "F-正式版 (每月构建, 末尾数字不为 0 的为内部测试构建)",
+        "F": "F-正式版 (每月构建)",
         "X": "X-开发版 (每周构建)",
-        "D": "D-开发版内测 (每日构建, 有时候会转到开发版)",
-        "T": "T-绝密版 (曾经的内测版及未通过测试的版本)",
-        "I": "I-内部构建 (内部测试使用, 有时候会转到开发版)",
+        "D": "D-内测版 (每日构建)",
+        "T": "T-绝密版 (老体验版)",
+        "I": "I-内部构建 (内部测试)",
     }
     return branch_descriptions.get(rom_branch, "其他版本")
 
@@ -161,7 +161,6 @@ def choose(name, interface):
 class XiaomiLoginManager:
     def __init__(self):
         self._agent = self.generate_agent()
-        self._device_id = self.generate_device_id()
         self._session = requests.session()
         self._sign = None
         self._ssecurity = None
@@ -179,11 +178,7 @@ class XiaomiLoginManager:
         )
         random_text = "".join(map(lambda i: chr(i), [random.randint(97, 122) for _ in range(18)]))
         return f"{random_text}-{agent_id} APP/com.xiaomi.mihome APPV/10.5.201"
-    
-    @staticmethod
-    def generate_device_id():
-        return "".join(map(lambda i: chr(i), [random.randint(97, 122) for _ in range(6)]))
-    
+
     @staticmethod
     def to_json(response_text):
         return json.loads(response_text.replace("&&&START&&&", ""))
@@ -331,14 +326,8 @@ class XiaomiLoginManager:
         if not self._location:
             return False, "未获取到cookie请求地址"
         
-        # 生成clientSign
-        sha1 = hashlib.sha1()
-        sha1.update(("nonce=" + str(self._code) + "&" + self._ssecurity).encode("utf-8"))
-        client_sign = base64.encodebytes(bytearray.fromhex(sha1.hexdigest()))
-        client_sign = client_sign.decode("utf-8").strip()
-        
         # 获取cookie
-        nurl = self._location + "&_userIdNeedEncrypt=true&clientSign=" + client_sign
+        nurl = self._location + "&_userIdNeedEncrypt=true"
         response3 = self._session.get(url=nurl, timeout=30)
         cookies_dict = requests.utils.dict_from_cookiejar(response3.cookies)
         
@@ -399,12 +388,7 @@ class XiaomiLoginManager:
             init(autoreset=True)
         except:
             pass
-        
-        self._session.cookies.set("sdkVersion", "accountsdk-18.8.15", domain="mi.com")
-        self._session.cookies.set("sdkVersion", "accountsdk-18.8.15", domain="xiaomi.com")
-        self._session.cookies.set("deviceId", self._device_id, domain="mi.com")
-        self._session.cookies.set("deviceId", self._device_id, domain="xiaomi.com")
-        
+
         try:
             from colorama import Fore
             print(f"{username}：登录中...")
