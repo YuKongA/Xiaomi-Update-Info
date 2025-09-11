@@ -494,15 +494,25 @@ def save_cookies_to_file(cookies_dict, filename="cookies.json"):
         json.dump(cookies_dict, file, ensure_ascii=False, indent=4)
 
 
-# 读取 cookies - miui_updater.py 原有的函数
+# 读取 cookies - miui_updater.py 原有的函数，增加异常处理
 def read_cookies_from_file(filename="cookies.json"):
     if os.path.isfile(filename):
-        with open(filename, "r", encoding="utf-8") as file:
-            cookies = json.load(file)
-            userId = cookies["userId"]
-            securityKey = base64.b64decode(cookies["ssecurity"])
-            serviceToken = cookies["serviceToken"]
-            return userId, securityKey, serviceToken
+        try:
+            with open(filename, "r", encoding="utf-8") as file:
+                # 检查文件是否为空
+                content = file.read().strip()
+                if not content:
+                    return "", "", ""
+                
+                file.seek(0)  # 重置文件指针到开头
+                cookies = json.load(file)
+                userId = cookies.get("userId", "")
+                securityKey = base64.b64decode(cookies.get("ssecurity", "")) if cookies.get("ssecurity") else ""
+                serviceToken = cookies.get("serviceToken", "")
+                return userId, securityKey, serviceToken
+        except (json.JSONDecodeError, KeyError, base64.binascii.Error, Exception):
+            # 处理JSON解析错误、键不存在、base64解码错误等所有异常
+            return "", "", ""
     return "", "", ""
 
 
