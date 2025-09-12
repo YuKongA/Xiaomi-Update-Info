@@ -95,17 +95,6 @@ def request(data):
         return None
 
 
-def parse_rom_branch(rom_branch):
-    branch_descriptions = {
-        "F": "F-正式版 (每月构建)",
-        "X": "X-开发版 (每周构建)",
-        "D": "D-内测版 (每日构建)",
-        "T": "T-绝密版 (老体验版)",
-        "I": "I-内部构建 (内部测试)",
-    }
-    return branch_descriptions.get(rom_branch, "其他版本")
-
-
 # 分析返回参数
 def choose(name, interface):
     interface_version = "v1" if interface == "1" else "v2"
@@ -117,12 +106,17 @@ def choose(name, interface):
     rom_md5 = current_rom_info.get("md5", "Unknown")
     rom_filename = current_rom_info.get("filename", "Unknown")
     rom_filesize = current_rom_info.get("filesize", "Unknown")
-    rom_bigversion = (
-        "HyperOS 1.0"
-        if current_rom_info.get("bigversion") == "816"
-        else "MIUI " + current_rom_info.get("bigversion", "Unknown")
-    )
-    rom_branch = parse_rom_branch(current_rom_info.get("branch", "Unknown"))
+    bigversion_value = current_rom_info.get("bigversion", "Unknown")
+    osbigversion_value = current_rom_info.get("osbigversion", None)
+    isbeta_value = current_rom_info.get("isBeta", None)
+    isgov_value = current_rom_info.get("isGov", None)
+    if bigversion_value == "816":
+        rom_bigversion = "HyperOS 1.0"
+    elif bigversion_value == "0":
+        rom_bigversion = None
+    else:
+        rom_bigversion = "MIUI " + bigversion_value
+    rom_branch = current_rom_info.get("branch", "Unknown")
     rom_changelog = re.sub(
         r"\n\s*\n",
         "\n",
@@ -148,11 +142,37 @@ def choose(name, interface):
     if rom_version == "Unknown":
         result = "\n\n未获取到相关 ROM 信息\n\n"
     elif rom_filename == "Unknown":
-        result = f"\ndevice: {rom_device}\nversion: {rom_version}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch}\ninterface: {interface_version}\n"
+        result = f"\ninterface: {interface_version}\ndevice: {rom_device}\nversion: {rom_version}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch}\n"
+        if isbeta_value and isbeta_value != "0":
+            result += f"isBeta: {isbeta_value}\n"
+        if isgov_value and isgov_value != "0":
+            result += f"isGov: {isgov_value}\n"
+        if osbigversion_value and osbigversion_value != "0":
+            result += f"osbigversion: {osbigversion_value}\n"
     elif rom_md5 == latset_rom_md5:
-        result = f"\ndevice: {rom_device}\nversion: {rom_version}\nbigversion: {rom_bigversion}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch}\ninterface: {interface_version}\n\nfilename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://ultimateota.d.miui.com/{rom_version}/{latset_rom_filename}\nchangelog:\n{rom_changelog}\n"
+        result = f"\ninterface: {interface_version}\ndevice: {rom_device}\nversion: {rom_version}\n"
+        if rom_bigversion:
+            result += f"bigversion: {rom_bigversion}\n"
+        if osbigversion_value and osbigversion_value != "0":
+            result += f"osbigversion: {osbigversion_value}\n"
+        result += f"codebase: Android {rom_codebase}\nbranch: {rom_branch}\n"
+        if isbeta_value and isbeta_value != "0":
+            result += f"isBeta: {isbeta_value}\n"
+        if isgov_value and isgov_value != "0":
+            result += f"isGov: {isgov_value}\n"
+        result += f"filename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://ultimateota.d.miui.com/{rom_version}/{latset_rom_filename}\nchangelog:\n{rom_changelog}\n"
     else:
-        result = f"\ndevice: {rom_device}\nversion: {rom_version}\nbigversion: {rom_bigversion}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch}\ninterface: {interface_version}\n\nfilename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://bigota.d.miui.com/{rom_version}/{rom_filename}\nchangelog:\n{rom_changelog}\n"
+        result = f"\ninterface: {interface_version}\ndevice: {rom_device}\nversion: {rom_version}\n"
+        if rom_bigversion:
+            result += f"bigversion: {rom_bigversion}\n"
+        if osbigversion_value and osbigversion_value != "0":
+            result += f"osbigversion: {osbigversion_value}\n"
+        result += f"codebase: Android {rom_codebase}\nbranch: {rom_branch}\n"
+        if isbeta_value and isbeta_value != "0":
+            result += f"isBeta: {isbeta_value}\n"
+        if isgov_value and isgov_value != "0":
+            result += f"isGov: {isgov_value}\n"
+        result += f"filename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://bigota.d.miui.com/{rom_version}/{rom_filename}\nchangelog:\n{rom_changelog}\n"
 
     print(result)
 
@@ -162,7 +182,6 @@ class XiaomiLoginManager:
     def __init__(self):
         self._agent = self.generate_agent()
         self._session = requests.session()
-        self._sign = None
         self._ssecurity = None
         self.userId = None
         self._cUserId = None
@@ -177,38 +196,13 @@ class XiaomiLoginManager:
             map(lambda i: chr(i), [random.randint(65, 69) for _ in range(13)])
         )
         random_text = "".join(map(lambda i: chr(i), [random.randint(97, 122) for _ in range(18)]))
-        return f"{random_text}-{agent_id} APP/com.xiaomi.mihome APPV/10.5.201"
+        return f"{random_text}-{agent_id} APP/com.android.updater APPV/9.1.0"
 
     @staticmethod
     def to_json(response_text):
         return json.loads(response_text.replace("&&&START&&&", ""))
     
-    def login_step_1(self, username):
-        url = "https://account.xiaomi.com/pass/serviceLogin?sid=miuiromota&_json=true"
-        headers = {
-            "User-Agent": self._agent,
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        cookies = {
-            "userId": username
-        }
-        response = self._session.get(url, headers=headers, cookies=cookies)
-        json_resp = self.to_json(response.text)
-        if response.status_code == 200:
-            if "_sign" in json_resp:
-                self._sign = json_resp["_sign"]
-                return True
-            elif "ssecurity" in json_resp:
-                self._ssecurity = json_resp["ssecurity"]
-                self.userId = json_resp["userId"]
-                self._cUserId = json_resp["cUserId"]
-                self._passToken = json_resp["passToken"]
-                self._location = json_resp["location"]
-                self._code = json_resp["code"]
-                return True
-        return False
-    
-    def login_step_2(self, username, password):
+    def login_step_1(self, username, password):
         url = "https://account.xiaomi.com/pass/serviceLoginAuth2"
         headers = {
             "User-Agent": self._agent,
@@ -218,7 +212,6 @@ class XiaomiLoginManager:
             "sid": "miuiromota",
             "hash": hashlib.md5(str.encode(password)).hexdigest().upper(),
             "user": username,
-            "_sign": self._sign,
             "_json": "true",
             "_locale": "zh_CN",
         }
@@ -258,21 +251,21 @@ class XiaomiLoginManager:
                 if "notificationUrl" in json_resp:
                     verify_url = json_resp["notificationUrl"]
                     
-                    print(f"需要双因素认证，请使用以下URL获取2FA验证码：")
+                    print(f"需要双因素认证，请使用以下 URL 获取 2FA 验证码：")
                     print(f"{verify_url}")
                     print(f"不要在小米网站上输入验证码！")
                     print()
-                    print("请输入2FA验证码：")
+                    print("请输入2FA 验证码：")
                     ticket = input()
                     print()
                     
                     json_resp = self.verify_ticket(verify_url, ticket)
                     if not json_resp:
-                        return False, "2FA验证失败"
+                        return False, "2FA 验证失败"
                     
                     location = json_resp["location"]
                     self._session.get(location, allow_redirects=True)
-                    self.login_step_1(username)
+                    self.login_step_1(username, password)
                     
                     return True, "成功"
                 else:
@@ -321,18 +314,18 @@ class XiaomiLoginManager:
         
         return False
     
-    def login_step_3(self):
-        # 处理登录结果，生成clientSign并获取cookie
+    def login_step_2(self):
+        # 处理登录结果，生成 clientSign 并获取 cookie
         if not self._location:
-            return False, "未获取到cookie请求地址"
+            return False, "未获取到 cookie 请求地址"
         
-        # 获取cookie
+        # 获取 cookie
         nurl = self._location + "&_userIdNeedEncrypt=true"
         response3 = self._session.get(url=nurl, timeout=30)
         cookies_dict = requests.utils.dict_from_cookiejar(response3.cookies)
         
         if "serviceToken" not in cookies_dict:
-            return False, "登录失败，未获取到serviceToken"
+            return False, "登录失败，未获取到 serviceToken"
         
         self._serviceToken = cookies_dict["serviceToken"]
         return True, "成功"
@@ -346,9 +339,9 @@ class XiaomiLoginManager:
         if response.status_code != 200:
             return ""
         
-        print(f"需要验证码验证。")
+        print(f"需要验证码验证")
         try:
-            # 尝试使用colorama
+            # 尝试使用 colorama
             try:
                 from colorama import Fore, Style
                 print(f"验证码图片URL: {Fore.BLUE}http://127.0.0.1:31415{Style.RESET_ALL}")
@@ -368,16 +361,16 @@ class XiaomiLoginManager:
                     img = Image.open(tmp_path)
                     img.show()
                 except Exception as e2:
-                    print(f"请打开 {tmp_path} 并解决验证码。")
+                    print(f"请打开 {tmp_path} 并解决验证码")
             except:
-                print("无法保存验证码图片，请手动处理。")
+                print("无法保存验证码图片，请手动处理")
         
         # Ask user for a captcha solution
         try:
             from colorama import Fore, Style
-            print(f"请输入图片中显示的验证码 {Fore.BLUE}(区分大小写){Style.RESET_ALL}:")
+            print(f"请输入图片中显示的验证码 {Fore.BLUE}(不区分大小写){Style.RESET_ALL}:")
         except:
-            print(f"请输入图片中显示的验证码 (区分大小写):")
+            print(f"请输入图片中显示的验证码 (不区分大小写):")
         captcha_solution = input().strip()
         print()
         return captcha_solution
@@ -395,14 +388,11 @@ class XiaomiLoginManager:
         except:
             print(f"{username}：登录中...")
         
-        if not self.login_step_1(username):
-            return False, "用户名无效"
-        
-        success, message = self.login_step_2(username, password)
+        success, message = self.login_step_1(username, password)
         if not success:
             return False, message
         
-        success, message = self.login_step_3()
+        success, message = self.login_step_2()
         if not success:
             return False, message
         
@@ -445,7 +435,7 @@ def login():
         success, result = manager.login(account, password)
         
         if success:
-            # 使用miui_updater.py的cookies处理函数
+            # 使用 miui_updater.py 的 cookies 理函数
             save_cookies_to_file(result)
             print(f"{account}: 登录成功")
         else:
@@ -495,7 +485,7 @@ def read_cookies_from_file(filename="cookies.json"):
                 serviceToken = cookies.get("serviceToken", "")
                 return userId, securityKey, serviceToken
         except (json.JSONDecodeError, KeyError, base64.binascii.Error, Exception):
-            # 处理JSON解析错误、键不存在、base64解码错误等所有异常
+            # 处理 JSON 解析错误、键不存在、base64 解码错误等所有异常
             return "", "", ""
     return "", "", ""
 
@@ -522,7 +512,7 @@ def main():
     if args.login:
         login()
     elif args.codename and args.rom_version and args.android_version:
-        rom_info(args.codename, args.rom_version, args.android_version, args.verbose)  # 修复这里的rom_version变量名
+        rom_info(args.codename, args.rom_version, args.android_version, args.verbose)
     else:
         print("请输入正确的参数，使用 -h 查看帮助")
         sys.exit()
