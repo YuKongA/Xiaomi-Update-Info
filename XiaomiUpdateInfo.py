@@ -1,522 +1,832 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import base64, json, re, requests, os, argparse, binascii, hashlib, getpass, sys, random, tempfile, threading, time
+from __future__ import annotations
+
+import argparse
+import base64
+import getpass
+import hashlib
+import json
+import os
+import random
+import re
+import sys
+import tempfile
+import threading
+import time
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Dict, Optional, Tuple
+
+import requests
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
-from urllib.parse import urlparse, parse_qs
-
-
-# 尝试导入必要的模块
-try:
-    from Crypto.Cipher import ARC4
-except ModuleNotFoundError:
-    try:
-        from Cryptodome.Cipher import ARC4
-    except ModuleNotFoundError:
-        pass  # ARC4 可能不用于核心功能
 
 try:
     from PIL import Image
+except ModuleNotFoundError:
+    Image = None
+
+try:
     from colorama import Fore, Style, init
 except ModuleNotFoundError:
-    pass  # 这些模块是可选的，用于验证码显示
+    Fore = Style = init = None
 
 
-# 常量
-MIUI_UPDATE_URL = "https://update.miui.com/updates/miotaV3.php"
-LOGININ_URL1 = "https://account.xiaomi.com/pass/serviceLogin"
-LOGININ_URL2 = "https://account.xiaomi.com/pass/serviceLoginAuth2"
-IV = b"0102030405060708"
+# ============================= 配置类 =============================
 
-
-# 生成上传数据
-def generate_json(device, version, android, userId):
-    data = {  # After testing, the commented out parts do not need to be assigned values.
-        # "obv": "OS1.0", # ro.mi.os.version.name
-        # "channel":"",  # Unknown
-        # "sys": "0",  # Unknown
-        # "bv": "816",  # bigversion
-        "id": userId,  # userId
-        # "sn": "0x0000000000000000",  # SN
-        # "a": "0",  # Unknown
-        # "b": "F" if "DEV" not in version else "X",  # MIUI branch
-        "c": android,  # android version Build.VERSION.RELEASE
-        # "unlock": "0",  # 1: bootloader is unlocked. 0: bootloader locked.
-        "d": device,  # PRODUCT_DEVICE
-        # "lockZoneChannel": "",  # Unknown
-        "f": "1",  # Unknown, necessary
-        "ov": version,  # ro.mi.os.version.incremental
-        # "g": "00000000000000000000000000000000",  # Unknown, 32
-        # "i": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
-        # "i2": "0000000000000000000000000000000000000000000000000000000000000000",  # Unknown, 64
-        # "isR": "0",  # ro.debuggable
-        "l": "zh_CN"
-        if "_global" not in device
-        else "en_US",  # The locale. (for changelog)
-        # "n": "ct",  # ro.carrier.name
-        # "p": device,  # PRODUCT_DEVICE
-        # "pb": "Xiaomi",  # "Redmi", PRODUCT_BRAND
-        "r": "CN"
-        if "_global" not in device
-        else "GL",  # Sales regions. (for changelog)
-        # MIUI version "MIUI-" + Build.VERSION.INCREMENTAL
-        "v": f"miui-{version.replace('OS1', 'V816')}",
+class Config:
+    # API 地址
+    MIUI_UPDATE_URL = "https://update.miui.com/updates/miotaV3.php"
+    LOGIN_URL = "https://account.xiaomi.com/pass/serviceLoginAuth2"
+    DOWNLOAD_BASE_URL_ULTIMATE = "https://ultimateota.d.miui.com"
+    DOWNLOAD_BASE_URL_BIG = "https://bigota.d.miui.com"
+    
+    # 加密相关
+    IV = b"0102030405060708"
+    DEFAULT_SECURITY_KEY = b"miuiotavalided11"
+    
+    # 网络配置
+    DEFAULT_TIMEOUT = 30
+    CAPTCHA_SERVER_PORT = 31415
+    
+    # 文件配置
+    DEFAULT_COOKIES_FILE = "cookies.json"
+    
+    # 本地化配置
+    LOCALE_MAP = {
+        'global': 'en_US',
+        'cn': 'zh_CN'
     }
-    return json.dumps(data).replace(" ", "").replace("'", '"')
+    
+    REGION_MAP = {
+        'global': 'GL',
+        'cn': 'CN'
+    }
 
 
-# AES 加密
-def miui_encrypt(json_request, securityKey):
-    cipher = AES.new(securityKey, AES.MODE_CBC, IV)
-    padded_text = pad(json_request.encode("utf-8"), cipher.block_size)
-    encrypted_text = cipher.encrypt(padded_text)
-    return base64.urlsafe_b64encode(encrypted_text).decode("utf-8")
+# ============================= 数据类 =============================
 
+@dataclass
+class RomInfo:
+    device: str = "Unknown"
+    version: str = "Unknown"
+    codebase: str = "Unknown"
+    md5: str = "Unknown"
+    filename: str = "Unknown"
+    filesize: str = "Unknown"
+    bigversion: str = "Unknown"
+    osbigversion: Optional[str] = None
+    isBeta: Optional[str] = None
+    isGov: Optional[str] = None
+    branch: str = "Unknown"
+    changelog: Any = "Unknown"
 
-# AES 解密
-def miui_decrypt(encrypted_text, securityKey):
-    cipher = AES.new(securityKey, AES.MODE_CBC, IV)
-    encrypted_text_bytes = base64.urlsafe_b64decode(encrypted_text)
-    decrypted_text = cipher.decrypt(encrypted_text_bytes)
-    unpadded_text = unpad(decrypted_text, cipher.block_size).decode("utf-8")
-    return json.loads(unpadded_text)
-
-
-# 获取返回参数
-def request(data):
-    try:
-        response = requests.post(url=MIUI_UPDATE_URL, data=data)
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException as e:
-        print(f"向服务器发送请求时出错: {e}")
+    @property
+    def display_bigversion(self) -> Optional[str]:
+        if self.bigversion == "816":
+            return "HyperOS 1.0"
+        if self.bigversion == "0":
+            return None
+        if self.bigversion and self.bigversion != "Unknown":
+            return f"MIUI {self.bigversion}"
         return None
 
+    @property
+    def is_global_rom(self) -> bool:
+        return "_global" in self.device
 
-# 分析返回参数
-def choose(name, interface):
-    interface_version = "v1" if interface == "1" else "v2"
+@dataclass
+class ApiRomResponse:
+    current: RomInfo
+    latest: RomInfo
 
-    current_rom_info = name.get("CurrentRom", {})
-    rom_device = current_rom_info.get("device", "Unknown")
-    rom_version = current_rom_info.get("version", "Unknown")
-    rom_codebase = current_rom_info.get("codebase", "Unknown")
-    rom_md5 = current_rom_info.get("md5", "Unknown")
-    rom_filename = current_rom_info.get("filename", "Unknown")
-    rom_filesize = current_rom_info.get("filesize", "Unknown")
-    bigversion_value = current_rom_info.get("bigversion", "Unknown")
-    osbigversion_value = current_rom_info.get("osbigversion", None)
-    isbeta_value = current_rom_info.get("isBeta", None)
-    isgov_value = current_rom_info.get("isGov", None)
-    if bigversion_value == "816":
-        rom_bigversion = "HyperOS 1.0"
-    elif bigversion_value == "0":
-        rom_bigversion = None
-    else:
-        rom_bigversion = "MIUI " + bigversion_value
-    rom_branch = current_rom_info.get("branch", "Unknown")
-    rom_changelog = re.sub(
-        r"\n\s*\n",
-        "\n",
-        json.dumps(
-            current_rom_info.get("changelog", "Unknown"),
-            indent=2,
-            ensure_ascii=False,
-            allow_nan=True,
-        )
-        .replace("[", "")
-        .replace("]", "")
-        .replace("{", "")
-        .replace("}", "")
-        .replace('"', "")
-        .replace("txt:", "")
-        .replace(",", ""),
-    )
-
-    latset_rom_info = name.get("LatestRom", {})
-    latset_rom_md5 = latset_rom_info.get("md5", "Unknown")
-    latset_rom_filename = latset_rom_info.get("filename", "Unknown")
-
-    if rom_version == "Unknown":
-        result = "\n\n未获取到相关 ROM 信息\n\n"
-    elif rom_filename == "Unknown":
-        result = f"\ninterface: {interface_version}\ndevice: {rom_device}\nversion: {rom_version}\ncodebase: Android {rom_codebase}\nbranch: {rom_branch}\n"
-        if isbeta_value and isbeta_value != "0":
-            result += f"isBeta: {isbeta_value}\n"
-        if isgov_value and isgov_value != "0":
-            result += f"isGov: {isgov_value}\n"
-        if osbigversion_value and osbigversion_value != "0":
-            result += f"osbigversion: {osbigversion_value}\n"
-    elif rom_md5 == latset_rom_md5:
-        result = f"\ninterface: {interface_version}\ndevice: {rom_device}\nversion: {rom_version}\n"
-        if rom_bigversion:
-            result += f"bigversion: {rom_bigversion}\n"
-        if osbigversion_value and osbigversion_value != "0":
-            result += f"osbigversion: {osbigversion_value}\n"
-        result += f"codebase: Android {rom_codebase}\nbranch: {rom_branch}\n"
-        if isbeta_value and isbeta_value != "0":
-            result += f"isBeta: {isbeta_value}\n"
-        if isgov_value and isgov_value != "0":
-            result += f"isGov: {isgov_value}\n"
-        result += f"filename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://ultimateota.d.miui.com/{rom_version}/{latset_rom_filename}\nchangelog:\n{rom_changelog}\n"
-    else:
-        result = f"\ninterface: {interface_version}\ndevice: {rom_device}\nversion: {rom_version}\n"
-        if rom_bigversion:
-            result += f"bigversion: {rom_bigversion}\n"
-        if osbigversion_value and osbigversion_value != "0":
-            result += f"osbigversion: {osbigversion_value}\n"
-        result += f"codebase: Android {rom_codebase}\nbranch: {rom_branch}\n"
-        if isbeta_value and isbeta_value != "0":
-            result += f"isBeta: {isbeta_value}\n"
-        if isgov_value and isgov_value != "0":
-            result += f"isGov: {isgov_value}\n"
-        result += f"filename: {rom_filename}\nfilesize: {rom_filesize}\ndownload: https://bigota.d.miui.com/{rom_version}/{rom_filename}\nchangelog:\n{rom_changelog}\n"
-
-    print(result)
+@dataclass
+class LoginCredentials:
+    userId: str
+    ssecurity: str
+    serviceToken: str
+    
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "userId": self.userId,
+            "ssecurity": self.ssecurity,
+            "serviceToken": self.serviceToken
+        }
 
 
-# 小米登录管理器类 - 从 xiaomi_login.py 合并
-class XiaomiLoginManager:
-    def __init__(self):
-        self._agent = self.generate_agent()
-        self._session = requests.session()
-        self._ssecurity = None
-        self.userId = None
-        self._cUserId = None
-        self._passToken = None
-        self._location = None
-        self._code = None
-        self._serviceToken = None
+# ============================= 异常类 =============================
+
+class XiaomiUpdateException(Exception):
+    """基础异常类"""
+    pass
+
+
+class LoginException(XiaomiUpdateException):
+    """登录相关异常"""
+    pass
+
+
+class CryptographyException(XiaomiUpdateException):
+    """加密解密相关异常"""
+    pass
+
+
+class ApiException(XiaomiUpdateException):
+    """API 请求相关异常"""
+    pass
+
+
+# ============================= 工具类 =============================
+
+class CryptoManager:
+    
+    @staticmethod
+    def encrypt(plaintext: str, security_key: bytes) -> str:
+        try:
+            cipher = AES.new(security_key, AES.MODE_CBC, Config.IV)
+            padded_text = pad(plaintext.encode("utf-8"), cipher.block_size)
+            encrypted_text = cipher.encrypt(padded_text)
+            return base64.urlsafe_b64encode(encrypted_text).decode("utf-8")
+        except Exception as e:
+            raise CryptographyException(f"加密失败: {e}") from e
+    
+    @staticmethod
+    def decrypt(encrypted_text: str, security_key: bytes) -> Dict[str, Any]:
+        try:
+            cipher = AES.new(security_key, AES.MODE_CBC, Config.IV)
+            encrypted_bytes = base64.urlsafe_b64decode(encrypted_text)
+            decrypted_text = cipher.decrypt(encrypted_bytes)
+            unpadded_text = unpad(decrypted_text, cipher.block_size).decode("utf-8")
+            return json.loads(unpadded_text)
+        except Exception as e:
+            raise CryptographyException(f"解密失败: {e}") from e
+
+
+# ============================= 请求数据构建类 =============================
+
+class RequestDataBuilder:
+
+    @staticmethod
+    def build_rom_request_data(device: str, version: str, android: str, user_id: Optional[str]) -> str:
+        is_global = "_global" in device
         
-    @staticmethod
-    def generate_agent():
-        agent_id = "".join(
-            map(lambda i: chr(i), [random.randint(65, 69) for _ in range(13)])
-        )
-        random_text = "".join(map(lambda i: chr(i), [random.randint(97, 122) for _ in range(18)]))
-        return f"{random_text}-{agent_id} APP/com.android.updater APPV/9.1.0"
+        data = {
+            "id": user_id,
+            "c": android,  # Android 版本
+            "d": device,   # 设备代号
+            "f": "1",      # 必需字段
+            "ov": version, # ROM 版本
+            "l": Config.LOCALE_MAP['global' if is_global else 'cn'],  # 语言
+            "r": Config.REGION_MAP['global' if is_global else 'cn'],  # 区域
+            "v": f"miui-{version.replace('OS1', 'V816')}",  # ROM 版本
+        }
+        
+        return json.dumps(data, separators=(",", ":"))
 
+
+# ============================= 文件管理类 =============================
+
+class FileManager:
+    
     @staticmethod
-    def to_json(response_text):
+    def save_login_credentials(credentials: LoginCredentials, filename: str = Config.DEFAULT_COOKIES_FILE) -> None:
+        try:
+            with open(filename, "w", encoding="utf-8") as file:
+                json.dump(credentials.to_dict(), file, ensure_ascii=False, indent=4)
+        except Exception as e:
+            raise IOError(f"保存凭据失败: {e}") from e
+    
+    @staticmethod
+    def load_login_credentials(filename: str = Config.DEFAULT_COOKIES_FILE) -> Tuple[str, bytes, str]:
+        if not os.path.isfile(filename):
+            return "", b"", ""
+            
+        try:
+            with open(filename, "r", encoding="utf-8") as file:
+                content = file.read().strip()
+                if not content:
+                    return "", b"", ""
+                
+                file.seek(0)
+                credentials = json.load(file)
+                
+                user_id = credentials.get("userId", "")
+                ssecurity = credentials.get("ssecurity", "")
+                service_token = credentials.get("serviceToken", "")
+                
+                security_key = base64.b64decode(ssecurity) if ssecurity else b""
+                
+                return user_id, security_key, service_token
+                
+        except Exception:
+            return "", b"", ""
+
+
+# ============================= 验证码处理类 =============================
+
+class CaptchaHandler:
+
+    def __init__(self):
+        self._server: Optional[HTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+    
+    def start_image_server(self, image_data: bytes) -> None:
+        class ImageHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.end_headers()
+                self.wfile.write(image_data)
+            
+            def log_message(self, format, *args):
+                pass  # 禁用日志输出
+        
+        try:
+            self._server = HTTPServer(("", Config.CAPTCHA_SERVER_PORT), ImageHandler)
+            self._thread = threading.Thread(target=self._server.serve_forever)
+            self._thread.daemon = True
+            self._thread.start()
+        except Exception as e:
+            print(f"启动验证码服务器失败: {e}")
+    
+    def handle_captcha_display(self, image_data: bytes) -> str:
+        print("需要验证码验证")
+        try:
+            # 尝试启动本地服务器显示验证码
+            self.start_image_server(image_data)
+            self._display_captcha_url()
+        except Exception:
+            # 备用方案，保存到临时文件
+            self._save_captcha_to_temp_file(image_data)
+        
+        return self._get_captcha_input()
+    
+    def _display_captcha_url(self) -> None:
+        url = f"http://127.0.0.1:{Config.CAPTCHA_SERVER_PORT}"
+        if Fore and Style:
+            print(f"验证码图片 URL: {Fore.BLUE}{url}{Style.RESET_ALL}")
+        else:
+            print(f"验证码图片 URL: {url}")
+    
+    def _save_captcha_to_temp_file(self, image_data: bytes) -> None:
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(image_data)
+                tmp_path = tmp.name
+            
+            print(f"验证码图片已保存至: {tmp_path}")
+            
+            # 尝试使用 PIL 显示图片
+            if Image:
+                try:
+                    img = Image.open(tmp_path)
+                    img.show()
+                except Exception:
+                    print(f"请手动打开 {tmp_path} 查看验证码")
+            else:
+                print(f"请手动打开 {tmp_path} 查看验证码")
+                
+        except Exception as e:
+            print(f"保存验证码图片失败: {e}")
+    
+    def _get_captcha_input(self) -> str:
+        if Fore and Style:
+            print(f"请输入图片中显示的验证码 {Fore.BLUE}(不区分大小写){Style.RESET_ALL}: ")
+        else:
+            print("请输入图片中显示的验证码 (不区分大小写): ")
+        
+        return input().strip()
+
+
+# ============================= 核心业务类 =============================
+
+class XiaomiLoginManager:
+
+    def __init__(self):
+        self._session = requests.Session()
+        self._captcha_handler = CaptchaHandler()
+        self._user_agent = self._generate_user_agent()
+        self._credentials: Optional[LoginCredentials] = None
+        self._location: Optional[str] = None
+        
+        # 初始化 colorama
+        if init:
+            init(autoreset=True)
+    
+    @staticmethod
+    def _generate_user_agent() -> str:
+        agent_id = "".join(chr(random.randint(65, 69)) for _ in range(13))
+        random_text = "".join(chr(random.randint(97, 122)) for _ in range(18))
+        return f"{random_text}-{agent_id} APP/com.android.updater APPV/9.1.0"
+    
+    @staticmethod
+    def _parse_json_response(response_text: str) -> Dict[str, Any]:
         return json.loads(response_text.replace("&&&START&&&", ""))
     
-    def login_step_1(self, username, password):
-        url = "https://account.xiaomi.com/pass/serviceLoginAuth2"
+    def login(self, username: str, password: str) -> LoginCredentials:
+        print(f"\n{username}: 登录中...\n")
+        
+        # 第一步: 账号密码验证
+        temp_credentials = self._login_step1(username, password)
+        
+        # 第二步: 获取服务令牌
+        service_token = self._login_step2(temp_credentials)
+        
+        # 构建完整凭据
+        self._credentials = LoginCredentials(
+            userId=temp_credentials.userId,
+            ssecurity=temp_credentials.ssecurity,
+            serviceToken=service_token
+        )
+        
+        return self._credentials
+    
+    def _login_step1(self, username: str, password: str) -> LoginCredentials:
+        url = Config.LOGIN_URL
         headers = {
-            "User-Agent": self._agent,
+            "User-Agent": self._user_agent,
             "Content-Type": "application/x-www-form-urlencoded"
         }
+        
+        # 构建请求参数
         fields = {
             "sid": "miuiromota",
-            "hash": hashlib.md5(str.encode(password)).hexdigest().upper(),
+            "hash": hashlib.md5(password.encode()).hexdigest().upper(),
             "user": username,
             "_json": "true",
             "_locale": "zh_CN",
         }
         
-        response = self._session.post(url, headers=headers, params=fields, allow_redirects=False)
-        valid = response is not None and response.status_code == 200
+        # 发送登录请求
+        response = self._session.post(
+            url, headers=headers, params=fields, 
+            allow_redirects=False, timeout=Config.DEFAULT_TIMEOUT
+        )
         
-        if valid:
-            json_resp = self.to_json(response.text)
-            if "captchaUrl" in json_resp and json_resp["captchaUrl"] is not None:
-                captcha_code = self.handle_captcha(json_resp["captchaUrl"])
-                if not captcha_code:
-                    return False, "验证码输入失败"
-                # Add captcha code to the fields and retry
-                fields["captCode"] = captcha_code
-                response = self._session.post(url, headers=headers, params=fields, allow_redirects=False)
-                if response is not None and response.status_code == 200:
-                    json_resp = self.to_json(response.text)
-                else:
-                    return False, "验证码重试失败"
-                if "code" in json_resp and json_resp["code"] == 87001:
-                    return False, "无效的验证码"
-            
-            description = json_resp.get("description", "")
-            if description != "成功" and "ssecurity" not in json_resp:
-                return False, description
-            
-            valid = "ssecurity" in json_resp and len(str(json_resp["ssecurity"])) > 4
-            if valid:
-                self._ssecurity = json_resp["ssecurity"]
-                self.userId = json_resp.get("userId", None)
-                self._cUserId = json_resp.get("cUserId", None)
-                self._passToken = json_resp.get("passToken", None)
-                self._location = json_resp.get("location", None)
-                self._code = json_resp.get("code", None)
-            else:
-                if "notificationUrl" in json_resp:
-                    verify_url = json_resp["notificationUrl"]
-                    
-                    print(f"需要双因素认证，请使用以下 URL 获取 2FA 验证码：")
-                    print(f"{verify_url}")
-                    print(f"不要在小米网站上输入验证码！")
-                    print()
-                    print("请输入2FA 验证码：")
-                    ticket = input()
-                    print()
-                    
-                    json_resp = self.verify_ticket(verify_url, ticket)
-                    if not json_resp:
-                        return False, "2FA 验证失败"
-                    
-                    location = json_resp["location"]
-                    self._session.get(location, allow_redirects=True)
-                    self.login_step_1(username, password)
-                    
-                    return True, "成功"
-                else:
-                    return False, "登录失败"
-        else:
-            return False, "服务器响应错误"
-        return valid, description if description else "成功"
+        if not response or response.status_code != 200:
+            raise LoginException("服务器响应错误")
+        
+        try:
+            json_resp = self._parse_json_response(response.text)
+        except Exception as e:
+            raise LoginException("服务器返回格式异常") from e
+        
+        # 处理验证码
+        if "captchaUrl" in json_resp and json_resp["captchaUrl"]:
+            json_resp = self._handle_captcha_challenge(json_resp["captchaUrl"], fields, headers, url)
+        
+        # 处理二次认证
+        if "notificationUrl" in json_resp:
+            self._handle_2fa_challenge(json_resp["notificationUrl"])
+            return self._login_step1(username, password)
+        
+        # 验证登录结果
+        if json_resp.get("description") != "成功" or "ssecurity" not in json_resp:
+            error_msg = json_resp.get("description", "登录失败")
+            raise LoginException(error_msg)
+        
+        if len(str(json_resp.get("ssecurity", ""))) <= 4:
+            raise LoginException("获取安全令牌失败")
+        
+        # 保存 location 地址用于第二步
+        self._location = json_resp.get("location")
+        
+        return LoginCredentials(
+            userId=json_resp.get("userId", ""),
+            ssecurity=json_resp.get("ssecurity", ""),
+            serviceToken=""
+        )
     
-    def verify_ticket(self, verify_url, ticket):
+    def _handle_captcha_challenge(self, captcha_url: str, fields: Dict, headers: Dict, url: str) -> Dict[str, Any]:
+        # 获取验证码图片
+        if captcha_url.startswith("/"):
+            captcha_url = "https://account.xiaomi.com" + captcha_url
+        
+        captcha_response = self._session.get(captcha_url, timeout=Config.DEFAULT_TIMEOUT)
+        if captcha_response.status_code != 200:
+            raise LoginException("获取验证码失败")
+        
+        # 显示验证码并获取用户输入
+        captcha_code = self._captcha_handler.handle_captcha_display(captcha_response.content)
+        if not captcha_code:
+            raise LoginException("验证码输入失败")
+        
+        # 重新提交带验证码的请求
+        fields["captCode"] = captcha_code
+        retry_response = self._session.post(
+            url, headers=headers, params=fields,
+            allow_redirects=False, timeout=Config.DEFAULT_TIMEOUT
+        )
+        
+        if not retry_response or retry_response.status_code != 200:
+            raise LoginException("验证码重试失败")
+        
+        try:
+            json_resp = self._parse_json_response(retry_response.text)
+        except Exception as e:
+            raise LoginException("验证码响应格式异常") from e
+        
+        if json_resp.get("code") == 87001:
+            raise LoginException("无效的验证码")
+        
+        return json_resp
+    
+    def _handle_2fa_challenge(self, notification_url: str) -> None:
+        print("需要二次认证，请使用以下 URL 获取 2FA 验证码: ")
+        print(notification_url)
+        print("\n不要在小米网站上输入验证码!!!")
+        print()
+        
+        ticket = input("请输入 2FA 验证码: ").strip()
+        if not ticket:
+            raise LoginException("2FA 验证码不能为空")
+        
+        if not self._verify_2fa_ticket(notification_url, ticket):
+            raise LoginException("2FA 验证失败")
+    
+    def _verify_2fa_ticket(self, verify_url: str, ticket: str) -> bool:
         path = 'identity/authStart'
         if path not in verify_url:
-            return None
-        resp = self._session.get(verify_url.replace(path, 'identity/list'))
+            return False
+        
+        # 获取身份会话
+        list_url = verify_url.replace(path, 'identity/list')
+        resp = self._session.get(list_url, timeout=Config.DEFAULT_TIMEOUT)
         identity_session = resp.cookies.get('identity_session')
+        
         if not identity_session:
             return False
-        data = self.to_json(resp.text) or {}
+        
+        try:
+            data = self._parse_json_response(resp.text) or {}
+        except Exception:
+            return False
+        
         flag = data.get('flag', 4)
         options = data.get('options', [flag])
         
+        # 尝试不同的验证方式
         for flag in options:
             api = {
                 4: '/identity/auth/verifyPhone',
                 8: '/identity/auth/verifyEmail',
             }.get(flag)
+            
             if not api:
                 continue
-            resp = self._session.post(
+            
+            verify_resp = self._session.post(
                 'https://account.xiaomi.com' + api,
-                params={
-                    '_dc': int(time.time() * 1000),
-                },
+                params={'_dc': int(time.time() * 1000)},
                 data={
                     '_flag': flag,
                     'ticket': ticket,
                     'trust': 'true',
                     '_json': 'true',
                 },
-                cookies={
-                    'identity_session': identity_session,
-                },
+                cookies={'identity_session': identity_session},
+                timeout=Config.DEFAULT_TIMEOUT,
             )
-            data = self.to_json(resp.text)
-            if data.get('code') == 0:
-                return data
+            
+            try:
+                verify_data = self._parse_json_response(verify_resp.text)
+                if verify_data.get('code') == 0:
+                    location = verify_data.get('location')
+                    if location:
+                        self._session.get(location, allow_redirects=True, timeout=Config.DEFAULT_TIMEOUT)
+                    return True
+            except Exception:
+                continue
         
         return False
     
-    def login_step_2(self):
-        # 处理登录结果，生成 clientSign 并获取 cookie
+    def _login_step2(self, temp_credentials: LoginCredentials) -> str:
         if not self._location:
-            return False, "未获取到 cookie 请求地址"
-        
-        # 获取 cookie
-        nurl = self._location + "&_userIdNeedEncrypt=true"
-        response3 = self._session.get(url=nurl, timeout=30)
-        cookies_dict = requests.utils.dict_from_cookiejar(response3.cookies)
-        
-        if "serviceToken" not in cookies_dict:
-            return False, "登录失败，未获取到 serviceToken"
-        
-        self._serviceToken = cookies_dict["serviceToken"]
-        return True, "成功"
-    
-    def handle_captcha(self, captcha_url):
-        # Full URL in case it's relative
-        if captcha_url.startswith("/"):
-            captcha_url = "https://account.xiaomi.com" + captcha_url
-        
-        response = self._session.get(captcha_url, stream=False)
-        if response.status_code != 200:
+            # 如果没有获取到 location 地址，使用 v1 接口
             return ""
         
-        print(f"需要验证码验证")
         try:
-            # 尝试使用 colorama
-            try:
-                from colorama import Fore, Style
-                print(f"验证码图片URL: {Fore.BLUE}http://127.0.0.1:31415{Style.RESET_ALL}")
-            except:
-                print(f"验证码图片URL: http://127.0.0.1:31415")
+            # 构建完整的 URL
+            full_url = self._location + "&_userIdNeedEncrypt=true"
             
-            # Try to serve an image file
-            start_image_server(response.content)
-        except Exception as e1:
-            # Save image to a temporary file
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(response.content)
-                    tmp_path = tmp.name
-                print(f"验证码图片已保存至: {tmp_path}")
-                try:
-                    img = Image.open(tmp_path)
-                    img.show()
-                except Exception as e2:
-                    print(f"请打开 {tmp_path} 并解决验证码")
-            except:
-                print("无法保存验证码图片，请手动处理")
-        
-        # Ask user for a captcha solution
-        try:
-            from colorama import Fore, Style
-            print(f"请输入图片中显示的验证码 {Fore.BLUE}(不区分大小写){Style.RESET_ALL}:")
-        except:
-            print(f"请输入图片中显示的验证码 (不区分大小写):")
-        captcha_solution = input().strip()
-        print()
-        return captcha_solution
+            # 发送请求获取 cookie
+            response = self._session.get(full_url, timeout=Config.DEFAULT_TIMEOUT)
+            response.raise_for_status()
+            
+            # 从 cookies 中提取 serviceToken
+            cookies_dict = requests.utils.dict_from_cookiejar(response.cookies)
+            service_token = cookies_dict.get("serviceToken", "")
+            
+            if not service_token:
+                # 如果无法获取 serviceToken，使用 v1 接口
+                return ""
+            
+            return service_token
+            
+        except Exception:
+            # 出现任何其他错误都返回空字符串，使用 v1 接口
+            return ""
+
+
+# ============================= ROM 信息查询类 =============================
+
+class RomInfoManager:
     
-    def login(self, username, password):
-        try:
-            from colorama import init
-            init(autoreset=True)
-        except:
-            pass
-
-        try:
-            from colorama import Fore
-            print(f"{username}：登录中...")
-        except:
-            print(f"{username}：登录中...")
-        
-        success, message = self.login_step_1(username, password)
-        if not success:
-            return False, message
-        
-        success, message = self.login_step_2()
-        if not success:
-            return False, message
-        
-        # 返回登录信息
-        login_info = {
-            "userId": self.userId,
-            "ssecurity": self._ssecurity,
-            "serviceToken": self._serviceToken
-        }
-        return True, login_info
-
-# 辅助函数：启动验证码图片服务器
-def start_image_server(image: bytes) -> None:
-    class ImgHttpHandler(BaseHTTPRequestHandler):
-
-        def do_GET(self) -> None:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(image)
-
-        def log_message(self, msg, *args) -> None:
-            pass
-
-    httpd = HTTPServer(("", 31415), ImgHttpHandler)
-    thread = threading.Thread(target=httpd.serve_forever)
-    thread.daemon = True
-    thread.start()
-
-# 登录函数 - 使用合并的 XiaomiLoginManager 类
-def login():
-    account = input("账号：")
-    password = getpass.getpass("密码：")
+    def __init__(self):
+        self._crypto_manager = CryptoManager()
+        self._request_builder = RequestDataBuilder()
     
-    if not account or not password:
-        print("账号或密码不能为空")
-        return
-    
-    try:
-        manager = XiaomiLoginManager()
-        success, result = manager.login(account, password)
-        
-        if success:
-            # 使用 miui_updater.py 的 cookies 理函数
-            save_cookies_to_file(result)
-            print(f"{account}: 登录成功")
-        else:
-            print(f"{account}: {result}")
-    except Exception as e:
-        print(f"登录出错: {e}")
-    
-    sys.exit()
-
-
-## 输出 ROM 信息
-def rom_info(codename, rom_version, android_version, verbose):
-    userId, securityKey, serviceToken = read_cookies_from_file()
-    interface = "1" if serviceToken == "" else "2"
-    securityKey = b"miuiotavalided11" if serviceToken == "" else securityKey
-    json_data = generate_json(codename, rom_version, android_version, userId)
-    encrypted_text = miui_encrypt(json_data, securityKey)
-    post_data = {"q": encrypted_text, "t": serviceToken, "s": interface}
-    requested_encrypted_text = request(post_data)
-    requested_decrypted_text = miui_decrypt(requested_encrypted_text, securityKey)
-    if verbose:
-        print(requested_decrypted_text)
-    else:
-        choose(requested_decrypted_text, interface)
-
-
-# 保存 cookies - miui_updater.py 原有的函数
-def save_cookies_to_file(cookies_dict, filename="cookies.json"):
-    with open(filename, "w", encoding="utf-8") as file:
-        json.dump(cookies_dict, file, ensure_ascii=False, indent=4)
-
-
-# 读取 cookies - miui_updater.py 原有的函数，增加异常处理
-def read_cookies_from_file(filename="cookies.json"):
-    if os.path.isfile(filename):
+    def query_rom_info(self, device: str, version: str, android: str, 
+                      credentials: Optional[LoginCredentials] = None, verbose: bool = False) -> None:
         try:
-            with open(filename, "r", encoding="utf-8") as file:
-                # 检查文件是否为空
-                content = file.read().strip()
-                if not content:
-                    return "", "", ""
+            # 获取认证信息
+            user_id, security_key, service_token = self._get_auth_info(credentials)
+            
+            # 确定接口版本
+            interface_version = "2" if service_token else "1"
+            
+            # 构建请求数据
+            json_data = self._request_builder.build_rom_request_data(device, version, android, user_id)
+            
+            # 加密请求数据
+            encrypted_data = self._crypto_manager.encrypt(json_data, security_key)
+            
+            # 发送请求
+            response_data = self._send_request(encrypted_data, service_token, interface_version)
+            
+            # 解密响应
+            decrypted_data = self._crypto_manager.decrypt(response_data, security_key)
+            
+            # 输出结果
+            if verbose:
+                print(json.dumps(decrypted_data, indent=2, ensure_ascii=False))
+            else:
+                self._format_and_display_rom_info(decrypted_data, interface_version)
                 
-                file.seek(0)  # 重置文件指针到开头
-                cookies = json.load(file)
-                userId = cookies.get("userId", "")
-                securityKey = base64.b64decode(cookies.get("ssecurity", "")) if cookies.get("ssecurity") else ""
-                serviceToken = cookies.get("serviceToken", "")
-                return userId, securityKey, serviceToken
-        except (json.JSONDecodeError, KeyError, base64.binascii.Error, Exception):
-            # 处理 JSON 解析错误、键不存在、base64 解码错误等所有异常
-            return "", "", ""
-    return "", "", ""
+        except Exception as e:
+            print(f"查询 ROM 信息失败: {e}")
+    
+    def _get_auth_info(self, credentials: Optional[LoginCredentials]) -> Tuple[str, bytes, str]:
+        if credentials:
+            user_id = credentials.userId
+            security_key = base64.b64decode(credentials.ssecurity) if credentials.ssecurity else Config.DEFAULT_SECURITY_KEY
+            service_token = credentials.serviceToken
+        else:
+            user_id, security_key, service_token = FileManager.load_login_credentials()
+            if not security_key:
+                security_key = Config.DEFAULT_SECURITY_KEY
+        
+        return user_id, security_key, service_token
+    
+    def _send_request(self, encrypted_data: str, service_token: str, interface_version: str) -> str:
+        post_data = {
+            "q": encrypted_data,
+            "t": service_token,
+            "s": interface_version
+        }
+        
+        try:
+            response = requests.post(
+                Config.MIUI_UPDATE_URL, 
+                data=post_data, 
+                timeout=Config.DEFAULT_TIMEOUT
+            )
+            response.raise_for_status()
+            
+            if not response.text:
+                raise ApiException("服务器返回空响应")
+            
+            return response.text
+            
+        except requests.RequestException as e:
+            raise ApiException(f"请求失败: {e}") from e
+    
+    def _format_and_display_rom_info(self, data: Dict[str, Any], interface_version: str) -> None:
+        formatter = RomInfoFormatter()
+        formatter.display_rom_info(data, interface_version)
 
 
-# 使用提示
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="Xiaomi Update Info")
-    parser.add_argument("codename", help="Device codename", nargs="?")
-    parser.add_argument("rom_version", help="ROM version", nargs="?")
-    parser.add_argument("android_version", help="Android version", nargs="?")
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="verbose output the returned json"
-    )
-    parser.add_argument(
-        "-l", "--login", action="store_true", help="login to get using v2 interface"
-    )
+# ============================= 格式化输出类 =============================
 
-    return parser.parse_args()
+class RomInfoFormatter:
+    
+    def display_rom_info(self, data: Dict[str, Any], interface_version: str) -> None:
+        try:
+            response = self._parse_api_response(data)
+            formatted_output = self._format_rom_info(response, interface_version)
+            print(formatted_output)
+        except Exception as e:
+            print(f"格式化 ROM 信息失败: {e}")
+    
+    def _parse_api_response(self, data: Dict[str, Any]) -> ApiRomResponse:
+        return ApiRomResponse(
+            current=self._parse_rom_info(data.get("CurrentRom", {})),
+            latest=self._parse_rom_info(data.get("LatestRom", {}))
+        )
+    
+    def _parse_rom_info(self, data: Dict[str, Any]) -> RomInfo:
+        return RomInfo(
+            device=data.get("device", "Unknown"),
+            version=data.get("version", "Unknown"),
+            codebase=data.get("codebase", "Unknown"),
+            md5=data.get("md5", "Unknown"),
+            filename=data.get("filename", "Unknown"),
+            filesize=data.get("filesize", "Unknown"),
+            bigversion=data.get("bigversion", "Unknown"),
+            osbigversion=data.get("osbigversion"),
+            isBeta=data.get("isBeta"),
+            isGov=data.get("isGov"),
+            branch=data.get("branch", "Unknown"),
+            changelog=data.get("changelog", "Unknown"),
+        )
+    
+    def _format_rom_info(self, response: ApiRomResponse, interface_version: str) -> str:
+        current = response.current
+        latest = response.latest
+        
+        if current.version == "Unknown":
+            return "\n\n未获取到相关 ROM 信息\n\n"
+        
+        # 构建基本信息
+        result_lines = [
+            f"interface: v{interface_version}",
+            f"device: {current.device}",
+            f"version: {current.version}",
+        ]
+        
+        # 添加大版本信息
+        if current.display_bigversion:
+            result_lines.append(f"bigversion: {current.display_bigversion}")
+        
+        # 添加OS大版本信息
+        if current.osbigversion and current.osbigversion != "0":
+            result_lines.append(f"osbigversion: {current.osbigversion}")
+        
+        # 添加基础信息
+        result_lines.extend([
+            f"codebase: Android {current.codebase}",
+            f"branch: {current.branch}",
+        ])
+        
+        # 添加特殊标记
+        if current.isBeta and current.isBeta != "0":
+            result_lines.append(f"isBeta: {current.isBeta}")
+        
+        if current.isGov and current.isGov != "0":
+            result_lines.append(f"isGov: {current.isGov}")
+        
+        # 如果没有文件名，只显示基本信息
+        if current.filename == "Unknown":
+            return "\n" + "\n".join(result_lines) + "\n"
+        
+        # 添加文件信息
+        result_lines.extend([
+            f"filename: {current.filename}",
+            f"filesize: {current.filesize}",
+        ])
+        
+        # 添加下载链接
+        if current.md5 == latest.md5:
+            download_url = f"{Config.DOWNLOAD_BASE_URL_ULTIMATE}/{current.version}/{latest.filename}"
+        else:
+            download_url = f"{Config.DOWNLOAD_BASE_URL_BIG}/{current.version}/{current.filename}"
+        
+        result_lines.append(f"download: {download_url}")
+        
+        # 添加更新日志
+        changelog = self._format_changelog(current.changelog)
+        result_lines.append(f"changelog:{changelog}")
+        
+        return "\n" + "\n".join(result_lines)
+    
+    def _format_changelog(self, raw_changelog: Any) -> str:
+        try:
+            if isinstance(raw_changelog, (dict, list)):
+                text = json.dumps(raw_changelog, indent=2, ensure_ascii=False, allow_nan=True)
+            else:
+                text = str(raw_changelog)
+
+            text = (
+                text.replace("[", "").replace("]", "")
+                .replace("{", "").replace("}", "")
+                .replace('"', "").replace("txt:", "")
+                .replace(",", "")
+            )
+
+            text = re.sub(r"\n\s*\n", "\n", text)
+            
+            return text
+            
+        except Exception:
+            return str(raw_changelog)
 
 
-# 主程序
-def main():
-    args = parse_arguments()
-    if args.login:
-        login()
-    elif args.codename and args.rom_version and args.android_version:
-        rom_info(args.codename, args.rom_version, args.android_version, args.verbose)
-    else:
-        print("请输入正确的参数，使用 -h 查看帮助")
-        sys.exit()
+# ============================= 应用程序类 =============================
 
+class XiaomiUpdateApp:
+
+    def __init__(self):
+        self.login_manager = XiaomiLoginManager()
+        self.rom_manager = RomInfoManager()
+        self.file_manager = FileManager()
+    
+    def run(self) -> None:
+        try:
+            args = self._parse_arguments()
+            
+            if args.login:
+                self._handle_login()
+            elif args.codename and args.rom_version and args.android_version:
+                self._handle_rom_query(args)
+            else:
+                print("请输入正确的参数，使用 -h 查看帮助")
+                sys.exit(1)
+                
+        except KeyboardInterrupt:
+            print("\n\n操作已取消")
+            sys.exit(1)
+        except Exception as e:
+            print(f"应用程序错误: {e}")
+            sys.exit(1)
+    
+    def _parse_arguments(self) -> argparse.Namespace:
+        parser = argparse.ArgumentParser(
+            description="XiaomiUpdateInfo",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog="""
+usage examples:
+  %(prog)s dada OS2.0.215.0.VOCCNXM 15                    # Check CN ROM information
+  %(prog)s dada_global OS2.0.222.0.WOCMIXM 16             # Check Global ROM Information
+  %(prog)s dada OS2.0.215.0.VOCCNXM 15 -v                 # Display detailed JSON response info
+            """
+        )
+        parser.add_argument(
+            "codename", 
+            help="Device code (e.g. dada, dada_global)", 
+            nargs="?"
+        )
+        parser.add_argument(
+            "rom_version", 
+            help="ROM version (e.g. OS2.0.215.0.VOCCNXM)", 
+            nargs="?"
+        )
+        parser.add_argument(
+            "android_version", 
+            help="Android version (e.g. 15, 16)", 
+            nargs="?"
+        )
+        parser.add_argument(
+            "-v", "--verbose", 
+            action="store_true", 
+            help="Display detailed Json response info"
+        )
+        parser.add_argument(
+            "-l", "--login", 
+            action="store_true", 
+            help="Login Xiaomi account to use v2 API."
+        )
+        return parser.parse_args()
+    
+    def _handle_login(self) -> None:
+        try:
+            username = input("Account: ").strip()
+            password = getpass.getpass("Password: ")
+            
+            if not username or not password:
+                raise LoginException("账号或密码不能为空")
+            
+            credentials = self.login_manager.login(username, password)
+            self.file_manager.save_login_credentials(credentials)
+            
+            print(f"\n{username}: 登录成功")
+            
+        except LoginException as e:
+            print(f"登录失败: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"登录过程中出现错误: {e}")
+            sys.exit(1)
+    
+    def _handle_rom_query(self, args: argparse.Namespace) -> None:
+        try:
+            self.rom_manager.query_rom_info(
+                device=args.codename,
+                version=args.rom_version,
+                android=args.android_version,
+                verbose=args.verbose
+            )
+        except Exception as e:
+            print(f"查询 ROM 信息失败: {e}")
+            sys.exit(1)
+
+
+# ============================= 程序入口 =============================
+
+def main() -> None:
+    app = XiaomiUpdateApp()
+    app.run()
 
 if __name__ == "__main__":
     main()
